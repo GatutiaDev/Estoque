@@ -1,0 +1,64 @@
+.root {
+    -fx-font-size: 13px;
+    -fx-background-color: #faf7f2;
+}
+
+.painel-formulario {
+    -fx-background-color: #ffffff;
+    -fx-border-color: transparent transparent #e6ded3 transparent;
+}
+
+.titulo {
+    -fx-font-size: 20px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #c1571f;
+}
+
+.botao-principal {
+    -fx-background-color: #e46f2c;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+
+.botao-principal:hover {
+    -fx-background-color: #c1571f;
+}
+
+.botao-perigo {
+    -fx-text-fill: #b3261e;
+}
+
+.table-row-cell.linha-vencida {
+    -fx-background-color: #f9d6d3;
+}
+
+.table-row-cell.linha-vencendo {
+    -fx-background-color: #fdf0c4;
+}
+
+.table-row-cell.linha-vencida:selected,
+.table-row-cell.linha-vencendo:selected {
+    -fx-background-color: -fx-selection-bar;
+}
+
+.legenda-vencido {
+    -fx-text-fill: #b3261e;
+}
+
+.legenda-vencendo {
+    -fx-text-fill: #9a7400;
+}
+
+.total {
+    -fx-font-weight: bold;
+    -fx-padding: 0 0 0 12;
+}
+
+.barra-busca {
+    -fx-background-color: #f3ede4;
+}
+
+.botao-quantidade {
+    -fx-font-weight: bold;
+    -fx-min-width: 40px;
+}
