@@ -5,8 +5,6 @@ import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
-import javafx.collections.transformation.FilteredList;
-import javafx.collections.transformation.SortedList;
 import javafx.fxml.FXML;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
@@ -17,11 +15,12 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
-import javafx.scene.control.TableCell;
-import javafx.scene.control.TableColumn;
-import javafx.scene.control.TableRow;
-import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TreeItem;
+import javafx.scene.control.TreeTableCell;
+import javafx.scene.control.TreeTableColumn;
+import javafx.scene.control.TreeTableRow;
+import javafx.scene.control.TreeTableView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseEvent;
 import org.example.Model.Categoria;
@@ -33,6 +32,13 @@ import org.example.viewmodel.EstoqueViewModel;
 import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public class MainController {
 
@@ -58,19 +64,19 @@ public class MainController {
     private Button botaoLimpar;
 
     @FXML
-    private TableView<Estoque> tabelaEstoque;
+    private TreeTableView<LinhaEstoque> tabelaEstoque;
     @FXML
-    private TableColumn<Estoque, String> colunaProduto;
+    private TreeTableColumn<LinhaEstoque, String> colunaProduto;
     @FXML
-    private TableColumn<Estoque, String> colunaCategoria;
+    private TreeTableColumn<LinhaEstoque, String> colunaCategoria;
     @FXML
-    private TableColumn<Estoque, String> colunaMarca;
+    private TreeTableColumn<LinhaEstoque, String> colunaMarca;
     @FXML
-    private TableColumn<Estoque, Integer> colunaQuantidade;
+    private TreeTableColumn<LinhaEstoque, Integer> colunaQuantidade;
     @FXML
-    private TableColumn<Estoque, Integer> colunaCaixa;
+    private TreeTableColumn<LinhaEstoque, String> colunaCaixa;
     @FXML
-    private TableColumn<Estoque, LocalDate> colunaVencimento;
+    private TreeTableColumn<LinhaEstoque, LocalDate> colunaVencimento;
 
     @FXML
     private TextField campoBusca;
@@ -85,23 +91,20 @@ public class MainController {
     private Label labelTotal;
 
     private EstoqueViewModel viewModel;
-    private FilteredList<Estoque> itensFiltrados;
     private Long idEmEdicao;
+
+    // Produtos que estão expandidos na árvore, para continuarem abertos quando a tabela é remontada
+    private final Set<String> produtosExpandidos = new HashSet<>();
 
     public void setViewModel(EstoqueViewModel viewModel) {
         this.viewModel = viewModel;
 
-        itensFiltrados = new FilteredList<>(viewModel.getItens());
-        SortedList<Estoque> itensOrdenados = new SortedList<>(itensFiltrados);
-        itensOrdenados.comparatorProperty().bind(tabelaEstoque.comparatorProperty());
-        tabelaEstoque.setItems(itensOrdenados);
+        viewModel.getItens().addListener((ListChangeListener<Estoque>) mudanca -> reconstruirTabela());
+        campoBusca.textProperty().addListener((observavel, antigo, novo) -> reconstruirTabela());
+        filtroCategoria.valueProperty().addListener((observavel, antigo, novo) -> reconstruirTabela());
+        filtroMarca.valueProperty().addListener((observavel, antigo, novo) -> reconstruirTabela());
 
-        campoBusca.textProperty().addListener((observavel, antigo, novo) -> aplicarFiltro());
-        filtroCategoria.valueProperty().addListener((observavel, antigo, novo) -> aplicarFiltro());
-        filtroMarca.valueProperty().addListener((observavel, antigo, novo) -> aplicarFiltro());
-        itensFiltrados.addListener((ListChangeListener<Estoque>) mudanca -> atualizarTotal());
-
-        atualizarTotal();
+        reconstruirTabela();
         Platform.runLater(campoProduto::requestFocus);
     }
 
@@ -125,50 +128,170 @@ public class MainController {
         filtroMarca.setCellFactory(lista -> criarCelulaEnum("Todas as marcas"));
         filtroMarca.setButtonCell(criarCelulaEnum("Todas as marcas"));
 
-        colunaProduto.setCellValueFactory(dados -> new SimpleStringProperty(dados.getValue().getProduto()));
-        colunaCategoria.setCellValueFactory(dados -> new SimpleStringProperty(formatarEnum(dados.getValue().getCategoria())));
-        colunaMarca.setCellValueFactory(dados -> new SimpleStringProperty(formatarEnum(dados.getValue().getMarca())));
-        colunaQuantidade.setCellValueFactory(dados -> new SimpleObjectProperty<>(dados.getValue().getQuantidade()));
-        colunaCaixa.setCellValueFactory(dados -> new SimpleObjectProperty<>(dados.getValue().getCaixa()));
-        colunaVencimento.setCellValueFactory(dados -> new SimpleObjectProperty<>(dados.getValue().getDataVencimento()));
-        colunaVencimento.setCellFactory(coluna -> new TableCell<>() {
+        configurarColunas();
+        configurarLinhas();
+
+        tabelaEstoque.setRoot(new TreeItem<>());
+        tabelaEstoque.setShowRoot(false);
+
+        configurarDesselecao();
+    }
+
+    private void configurarColunas() {
+        // Nos lotes que ficam dentro de um produto, nome, categoria e marca já aparecem na linha do produto
+        colunaProduto.setCellValueFactory(dados -> {
+            LinhaEstoque linha = dados.getValue().getValue();
+            return new SimpleStringProperty(linha.isDentroDeProduto() ? "Lote" : linha.getProduto());
+        });
+        colunaProduto.setCellFactory(coluna -> new TreeTableCell<>() {
+            @Override
+            protected void updateItem(String texto, boolean vazio) {
+                super.updateItem(texto, vazio);
+                setText(vazio ? null : texto);
+                LinhaEstoque linha = vazio || getTableRow() == null ? null : getTableRow().getItem();
+                getStyleClass().remove("texto-lote");
+                if (linha != null && linha.isDentroDeProduto()) {
+                    getStyleClass().add("texto-lote");
+                }
+            }
+        });
+
+        colunaCategoria.setCellValueFactory(dados -> {
+            LinhaEstoque linha = dados.getValue().getValue();
+            return new SimpleStringProperty(linha.isDentroDeProduto() ? "" : formatarEnum(linha.getCategoria()));
+        });
+        colunaMarca.setCellValueFactory(dados -> {
+            LinhaEstoque linha = dados.getValue().getValue();
+            return new SimpleStringProperty(linha.isDentroDeProduto() ? "" : formatarEnum(linha.getMarca()));
+        });
+
+        colunaQuantidade.setCellValueFactory(dados -> new SimpleObjectProperty<>(dados.getValue().getValue().getQuantidade()));
+
+        colunaCaixa.setCellValueFactory(dados -> new SimpleStringProperty(dados.getValue().getValue().getCaixas()));
+        // "10" deve vir depois de "2": ordena pelo número da primeira caixa, não pelo texto
+        colunaCaixa.setComparator(Comparator.comparingInt(this::primeiraCaixa));
+
+        colunaVencimento.setCellValueFactory(dados -> new SimpleObjectProperty<>(dados.getValue().getValue().getVencimento()));
+        colunaVencimento.setCellFactory(coluna -> new TreeTableCell<>() {
             @Override
             protected void updateItem(LocalDate data, boolean vazio) {
                 super.updateItem(data, vazio);
                 setText(vazio || data == null ? null : data.format(FORMATO_DATA));
             }
         });
+    }
 
+    private void configurarLinhas() {
         tabelaEstoque.setRowFactory(tabela -> {
-            TableRow<Estoque> linha = new TableRow<>() {
+            TreeTableRow<LinhaEstoque> linha = new TreeTableRow<>() {
                 @Override
-                protected void updateItem(Estoque item, boolean vazio) {
+                protected void updateItem(LinhaEstoque item, boolean vazio) {
                     super.updateItem(item, vazio);
-                    getStyleClass().removeAll("linha-vencida", "linha-vencendo");
+                    getStyleClass().removeAll("linha-vencida", "linha-vencendo", "linha-produto");
 
-                    if (vazio || item == null || item.getDataVencimento() == null) {
+                    if (vazio || item == null) {
                         return;
                     }
+                    if (item.isProduto()) {
+                        getStyleClass().add("linha-produto");
+                    }
 
+                    // No produto, o vencimento é o do lote que vence primeiro: a cor fica a do pior lote
+                    LocalDate vencimento = item.getVencimento();
+                    if (vencimento == null) {
+                        return;
+                    }
                     LocalDate hoje = LocalDate.now();
-                    if (item.getDataVencimento().isBefore(hoje)) {
+                    if (vencimento.isBefore(hoje)) {
                         getStyleClass().add("linha-vencida");
-                    } else if (!item.getDataVencimento().isAfter(hoje.plusMonths(MESES_ALERTA_VENCIMENTO))) {
+                    } else if (!vencimento.isAfter(hoje.plusMonths(MESES_ALERTA_VENCIMENTO))) {
                         getStyleClass().add("linha-vencendo");
                     }
                 }
             };
 
-            // Duplo clique na linha abre o produto para edição
+            // Duplo clique num lote abre para edição (num produto, o duplo clique expande/recolhe)
             linha.setOnMouseClicked(evento -> {
-                if (evento.getClickCount() == 2 && !linha.isEmpty()) {
-                    iniciarEdicao(linha.getItem());
+                if (evento.getClickCount() == 2 && !linha.isEmpty() && !linha.getItem().isProduto()) {
+                    iniciarEdicao(linha.getItem().getLote());
                 }
             });
             return linha;
         });
+    }
 
-        configurarDesselecao();
+    // Remonta a árvore a partir da lista do ViewModel, aplicando a busca e os filtros.
+    // É chamada quando a lista muda (cadastro, edição, +1/−1, exclusão) ou quando um filtro muda.
+    private void reconstruirTabela() {
+        if (viewModel == null) {
+            return;
+        }
+
+        // Guarda o que estava selecionado para selecionar de novo depois de remontar
+        LinhaEstoque selecionadaAntes = linhaSelecionada();
+
+        List<Estoque> visiveis = viewModel.getItens().stream()
+                .filter(this::passaNosFiltros)
+                .toList();
+
+        Map<String, List<Estoque>> lotesPorProduto = visiveis.stream()
+                .collect(Collectors.groupingBy(this::chaveProduto, LinkedHashMap::new, Collectors.toList()));
+
+        TreeItem<LinhaEstoque> raiz = new TreeItem<>();
+        lotesPorProduto.forEach((chave, lotes) -> raiz.getChildren().add(criarItemProduto(chave, lotes)));
+
+        tabelaEstoque.setRoot(raiz);
+        tabelaEstoque.sort();
+
+        if (selecionadaAntes != null) {
+            if (selecionadaAntes.isProduto()) {
+                selecionarProduto(selecionadaAntes.getChaveProduto());
+            } else {
+                selecionarPorId(selecionadaAntes.getLote().getId());
+            }
+        }
+
+        atualizarTotal(visiveis, lotesPorProduto.size());
+    }
+
+    private TreeItem<LinhaEstoque> criarItemProduto(String chave, List<Estoque> lotes) {
+        if (lotes.size() == 1) {
+            return new TreeItem<>(LinhaEstoque.loteUnico(chave, lotes.get(0)));
+        }
+
+        List<Estoque> ordenados = lotes.stream()
+                .sorted(Comparator.comparing(Estoque::getDataVencimento).thenComparing(Estoque::getCaixa))
+                .toList();
+
+        TreeItem<LinhaEstoque> itemProduto = new TreeItem<>(LinhaEstoque.produto(chave, ordenados));
+        for (Estoque lote : ordenados) {
+            itemProduto.getChildren().add(new TreeItem<>(LinhaEstoque.loteDoProduto(chave, lote)));
+        }
+
+        itemProduto.setExpanded(produtosExpandidos.contains(chave));
+        itemProduto.expandedProperty().addListener((observavel, antes, expandido) -> {
+            if (expandido) {
+                produtosExpandidos.add(chave);
+            } else {
+                produtosExpandidos.remove(chave);
+            }
+        });
+        return itemProduto;
+    }
+
+    // Lotes com o mesmo nome (ignorando maiúsculas, acentos e espaços) e a mesma marca são o mesmo produto
+    private String chaveProduto(Estoque lote) {
+        return normalizar(lote.getProduto()) + "|" + lote.getMarca();
+    }
+
+    private boolean passaNosFiltros(Estoque item) {
+        String termo = normalizar(campoBusca.getText());
+        Categoria categoria = filtroCategoria.getValue();
+        Marca marca = filtroMarca.getValue();
+
+        return (categoria == null || item.getCategoria() == categoria)
+                && (marca == null || item.getMarca() == marca)
+                && (termo.isEmpty() || normalizar(item.getProduto()).contains(termo));
     }
 
     private void configurarDesselecao() {
@@ -190,9 +313,9 @@ public class MainController {
         // Sobe do elemento clicado até a raiz da tela para descobrir onde foi o clique
         for (Node no = evento.getPickResult().getIntersectedNode(); no != null; no = no.getParent()) {
             if (no instanceof ButtonBase) {
-                return; // botões (Editar, −1, +1, Excluir) agem sobre o produto selecionado
+                return; // botões (Editar, −1, +1, Excluir) agem sobre o item selecionado
             }
-            if (no instanceof TableRow<?> linha) {
+            if (no instanceof TreeTableRow<?> linha) {
                 if (linha.isEmpty()) {
                     tabelaEstoque.getSelectionModel().clearSelection(); // área vazia abaixo dos produtos
                 }
@@ -245,48 +368,68 @@ public class MainController {
 
     @FXML
     private void aoClicarEditar() {
-        Estoque selecionado = tabelaEstoque.getSelectionModel().getSelectedItem();
-        if (selecionado == null) {
+        LinhaEstoque selecionada = linhaSelecionada();
+        if (selecionada == null) {
             mostrarErro("Selecione um produto para editar.");
             return;
         }
-        iniciarEdicao(selecionado);
+        if (selecionada.isProduto()) {
+            expandirSelecionado();
+            mostrarErro("Este produto tem vários lotes. Selecione o lote que deseja editar.");
+            return;
+        }
+        iniciarEdicao(selecionada.getLote());
     }
 
     @FXML
     private void aoClicarAumentar() {
-        alterarQuantidadeSelecionado(true);
+        LinhaEstoque selecionada = linhaSelecionada();
+        if (selecionada == null) {
+            mostrarErro("Selecione um produto na tabela.");
+            return;
+        }
+        if (selecionada.isProduto()) {
+            expandirSelecionado();
+            mostrarErro("Selecione o lote (caixa e vencimento) que vai receber a unidade.\n"
+                    + "Para um vencimento novo, cadastre um novo lote pelo formulário.");
+            return;
+        }
+        alterarQuantidade(selecionada.getLote().getId(), true);
     }
 
     @FXML
     private void aoClicarDiminuir() {
-        alterarQuantidadeSelecionado(false);
-    }
-
-    private void alterarQuantidadeSelecionado(boolean aumentar) {
-        Estoque selecionado = tabelaEstoque.getSelectionModel().getSelectedItem();
-        if (selecionado == null) {
+        LinhaEstoque selecionada = linhaSelecionada();
+        if (selecionada == null) {
             mostrarErro("Selecione um produto na tabela.");
             return;
         }
 
-        Long id = selecionado.getId();
+        Estoque lote = selecionada.isProduto() ? selecionada.loteQueVencePrimeiro() : selecionada.getLote();
+        if (lote == null) {
+            mostrarErro("Este produto não tem unidades em estoque.");
+            return;
+        }
+        alterarQuantidade(lote.getId(), false);
+    }
+
+    private void alterarQuantidade(Long idLote, boolean aumentar) {
         try {
             if (aumentar) {
-                viewModel.aumentarQuantidade(id);
+                viewModel.aumentarQuantidade(idLote);
             } else {
-                viewModel.diminuirQuantidade(id);
+                viewModel.diminuirQuantidade(idLote);
             }
         } catch (RuntimeException e) {
             mostrarErro(e.getMessage());
         }
 
-        // A lista é recarregada do banco, então a seleção se perde: seleciona de novo pelo id
-        Estoque atualizado = selecionarPorId(id);
-
-        // Se esse produto está aberto no formulário, mantém a quantidade do formulário em dia
-        if (atualizado != null && id.equals(idEmEdicao)) {
-            campoQuantidade.setText(String.valueOf(atualizado.getQuantidade()));
+        // Se esse lote está aberto no formulário, mantém a quantidade do formulário em dia
+        if (idLote.equals(idEmEdicao)) {
+            viewModel.getItens().stream()
+                    .filter(item -> item.getId().equals(idLote))
+                    .findFirst()
+                    .ifPresent(item -> campoQuantidade.setText(String.valueOf(item.getQuantidade())));
         }
     }
 
@@ -304,35 +447,31 @@ public class MainController {
         campoProduto.requestFocus();
     }
 
-    private Estoque selecionarPorId(Long id) {
-        for (Estoque item : tabelaEstoque.getItems()) {
-            if (item.getId().equals(id)) {
-                tabelaEstoque.getSelectionModel().select(item);
-                tabelaEstoque.scrollTo(item);
-                return item;
-            }
-        }
-        return null;
-    }
-
     @FXML
     private void aoClicarExcluir() {
-        Estoque selecionado = tabelaEstoque.getSelectionModel().getSelectedItem();
-        if (selecionado == null) {
+        LinhaEstoque selecionada = linhaSelecionada();
+        if (selecionada == null) {
             mostrarErro("Selecione um produto para excluir.");
             return;
         }
 
-        Alert confirmacao = new Alert(Alert.AlertType.CONFIRMATION,
-                "Excluir \"" + selecionado.getProduto() + "\" do estoque?", ButtonType.YES, ButtonType.NO);
+        String pergunta = selecionada.isProduto()
+                ? "Excluir \"" + selecionada.getProduto() + "\" e todos os seus "
+                        + selecionada.getLotes().size() + " lotes do estoque?"
+                : "Excluir \"" + selecionada.getProduto() + "\" (caixa " + selecionada.getCaixas()
+                        + ", vence " + selecionada.getVencimento().format(FORMATO_DATA) + ") do estoque?";
+
+        Alert confirmacao = new Alert(Alert.AlertType.CONFIRMATION, pergunta, ButtonType.YES, ButtonType.NO);
         confirmacao.setHeaderText(null);
         confirmacao.showAndWait()
                 .filter(resposta -> resposta == ButtonType.YES)
                 .ifPresent(resposta -> {
                     try {
-                        viewModel.deletarEstoque(selecionado.getId());
-                        if (selecionado.getId().equals(idEmEdicao)) {
-                            limparFormulario();
+                        for (Estoque lote : selecionada.getLotes()) {
+                            viewModel.deletarEstoque(lote.getId());
+                            if (lote.getId().equals(idEmEdicao)) {
+                                limparFormulario();
+                            }
                         }
                     } catch (RuntimeException e) {
                         mostrarErro(e.getMessage());
@@ -347,15 +486,62 @@ public class MainController {
         filtroMarca.setValue(null);
     }
 
-    private void aplicarFiltro() {
-        String termo = normalizar(campoBusca.getText());
-        Categoria categoria = filtroCategoria.getValue();
-        Marca marca = filtroMarca.getValue();
+    private LinhaEstoque linhaSelecionada() {
+        TreeItem<LinhaEstoque> item = tabelaEstoque.getSelectionModel().getSelectedItem();
+        return item == null ? null : item.getValue();
+    }
 
-        itensFiltrados.setPredicate(item ->
-                (categoria == null || item.getCategoria() == categoria)
-                        && (marca == null || item.getMarca() == marca)
-                        && (termo.isEmpty() || normalizar(item.getProduto()).contains(termo)));
+    private void expandirSelecionado() {
+        TreeItem<LinhaEstoque> item = tabelaEstoque.getSelectionModel().getSelectedItem();
+        if (item != null) {
+            item.setExpanded(true);
+        }
+    }
+
+    // Procura o lote na árvore (sozinho ou dentro de um produto), expande o produto se precisar e seleciona
+    private void selecionarPorId(Long id) {
+        for (TreeItem<LinhaEstoque> item : tabelaEstoque.getRoot().getChildren()) {
+            if (!item.getValue().isProduto()) {
+                if (item.getValue().getLote().getId().equals(id)) {
+                    selecionar(item);
+                    return;
+                }
+                continue;
+            }
+            for (TreeItem<LinhaEstoque> filho : item.getChildren()) {
+                if (filho.getValue().getLote().getId().equals(id)) {
+                    item.setExpanded(true);
+                    selecionar(filho);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Seleciona a linha do produto pela chave. Se o produto ficou com um lote só, seleciona esse lote.
+    private void selecionarProduto(String chave) {
+        for (TreeItem<LinhaEstoque> item : tabelaEstoque.getRoot().getChildren()) {
+            if (item.getValue().getChaveProduto().equals(chave)) {
+                selecionar(item);
+                return;
+            }
+        }
+    }
+
+    private void selecionar(TreeItem<LinhaEstoque> item) {
+        tabelaEstoque.getSelectionModel().select(item);
+        int linha = tabelaEstoque.getRow(item);
+        if (linha >= 0) {
+            tabelaEstoque.scrollTo(linha);
+        }
+    }
+
+    private int primeiraCaixa(String caixas) {
+        try {
+            return Integer.parseInt(caixas.split(",")[0].trim());
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     // Deixa minúsculo e remove acentos, para "algodão" encontrar "Algodao" e vice-versa
@@ -392,19 +578,19 @@ public class MainController {
         campoProduto.requestFocus();
     }
 
-    private void atualizarTotal() {
-        int totalCadastrados = viewModel.getItens().size();
-        int totalVisiveis = itensFiltrados.size();
-        int totalUnidades = itensFiltrados.stream().mapToInt(Estoque::getQuantidade).sum();
+    private void atualizarTotal(List<Estoque> visiveis, int produtosVisiveis) {
+        long produtosCadastrados = viewModel.getItens().stream().map(this::chaveProduto).distinct().count();
+        int totalUnidades = visiveis.stream().mapToInt(Estoque::getQuantidade).sum();
+        String detalhe = visiveis.size() + " lote(s) · " + totalUnidades + " unidade(s)";
 
-        if (totalVisiveis == totalCadastrados) {
-            labelTotal.setText(totalCadastrados + " produto(s) · " + totalUnidades + " unidade(s)");
+        if (produtosVisiveis == produtosCadastrados) {
+            labelTotal.setText(produtosCadastrados + " produto(s) · " + detalhe);
         } else {
-            labelTotal.setText("Mostrando " + totalVisiveis + " de " + totalCadastrados
-                    + " produto(s) · " + totalUnidades + " unidade(s)");
+            labelTotal.setText("Mostrando " + produtosVisiveis + " de " + produtosCadastrados
+                    + " produto(s) · " + detalhe);
         }
 
-        labelTabelaVazia.setText(totalCadastrados == 0
+        labelTabelaVazia.setText(produtosCadastrados == 0
                 ? "Nenhum produto cadastrado ainda."
                 : "Nenhum produto encontrado para essa busca.");
     }

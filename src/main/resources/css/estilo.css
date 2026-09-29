@@ -28,17 +28,32 @@
     -fx-text-fill: #b3261e;
 }
 
-.table-row-cell.linha-vencida {
+.tree-table-row-cell.linha-vencida {
     -fx-background-color: #f9d6d3;
 }
 
-.table-row-cell.linha-vencendo {
+.tree-table-row-cell.linha-vencendo {
     -fx-background-color: #fdf0c4;
 }
 
-.table-row-cell.linha-vencida:selected,
-.table-row-cell.linha-vencendo:selected {
+.tree-table-row-cell.linha-vencida:selected,
+.tree-table-row-cell.linha-vencendo:selected {
     -fx-background-color: -fx-selection-bar;
+}
+
+/* Linha do produto que agrupa vários lotes */
+.tree-table-row-cell.linha-produto .tree-table-cell {
+    -fx-font-weight: bold;
+}
+
+/* Texto "Lote" nas linhas dentro de um produto */
+.texto-lote {
+    -fx-text-fill: #8a7f72;
+    -fx-font-style: italic;
+}
+
+.tree-table-row-cell:selected .texto-lote {
+    -fx-text-fill: -fx-selection-bar-text;
 }
 
 .legenda-vencido {
