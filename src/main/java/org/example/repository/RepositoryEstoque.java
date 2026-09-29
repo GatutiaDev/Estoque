@@ -25,7 +25,7 @@ public class RepositoryEstoque implements EstoqueRepository {
     @Override
     public void salvar(Estoque estoque) {
         if (estoque.getId() == null) {
-            inserir(estoque);
+            inserirOuSomar(estoque);
         } else {
             atualizar(estoque);
         }
@@ -53,6 +53,31 @@ public class RepositoryEstoque implements EstoqueRepository {
     }
 
     @Override
+    public Long buscaLote(Estoque estoque) {
+        String sql = """
+                SELECT * FROM estoque
+                WHERE LOWER(TRIM(produto)) = LOWER(TRIM(?))
+                  AND marca = ? AND caixa = ? AND data_vencimento = ?
+                """;
+        try (PreparedStatement statement = conn.prepareStatement(sql)) {
+            statement.setString(1, estoque.getProduto());
+            statement.setString(2, estoque.getMarca().name());
+            statement.setInt(3, estoque.getCaixa());
+            statement.setString(4, String.valueOf(estoque.getDataVencimento()));
+            try (ResultSet rs = statement.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                } else {
+                    return null;
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException("Não foi possível buscar o lote", e);
+        }
+    }
+
+
+    @Override
     public void deletar(Long id) {
         String sql = """
                 DELETE FROM estoque
@@ -65,7 +90,6 @@ public class RepositoryEstoque implements EstoqueRepository {
         } catch (SQLException e) {
             throw new RuntimeException("Não foi possível excluir o produto", e);
         }
-
     }
 
     @Override
@@ -135,6 +159,38 @@ public class RepositoryEstoque implements EstoqueRepository {
         }
     }
 
+    private void inserirOuSomar(Estoque estoque) {
+
+        String sql = """
+                UPDATE estoque SET quantidade = quantidade + ? WHERE id = ?
+                """;
+
+        try (PreparedStatement statement = conn.prepareStatement(sql)) {
+            conn.setAutoCommit(false);
+
+            Long idExistente = buscaLote(estoque);
+
+            if (idExistente != null) {
+                statement.setInt(1, estoque.getQuantidade());
+                statement.setLong(2, idExistente);
+                statement.executeUpdate();
+            } else {
+                inserir(estoque);
+            }
+            conn.commit();
+        } catch (SQLException | RuntimeException e) {
+            try { conn.rollback(); } catch (SQLException ignorada) { }
+            throw new RuntimeException("Não foi possível salvar o lote", e);
+        }
+        finally {
+            try {
+                conn.setAutoCommit(true);
+            } catch (SQLException ignorada) {
+            }
+        }
+    }
+
+
     private void inserir(Estoque estoque) {
         String sql = """
                 INSERT INTO estoque (produto, categoria, quantidade, caixa, data_vencimento, marca)
@@ -148,5 +204,6 @@ public class RepositoryEstoque implements EstoqueRepository {
             throw new RuntimeException("Não foi possível salvar o produto", e);
         }
     }
+
 
 }

@@ -17,6 +17,7 @@
         <sqlite-jdbc.version>3.53.4.0</sqlite-jdbc.version>
     </properties>
 
+
     <dependencies>
         <dependency>
             <groupId>org.openjfx</groupId>
